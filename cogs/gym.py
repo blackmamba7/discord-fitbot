@@ -5,16 +5,6 @@ import sqlite3
 from typing import Annotated, Optional
 from datetime import date, timedelta
 
-# Simple static list for autocomplete; you can replace with DB-backed list.
-ACTIVITIES = ["pushup", "pullup", "run", "squat", "gym"]
-
-# async def activity_autocomplete(interaction: discord.Interaction, current: str):
-#     return [
-#         app_commands.Choice(name=a, value=a)
-#         for a in ACTIVITIES
-#         if current.lower() in a.lower()
-#     ][:25]
-
 class Gym(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -32,12 +22,16 @@ class Gym(commands.Cog):
     @app_commands.command(name="boss_setup", description="Summon a new boss for the group to fight!")
     @app_commands.describe(name="Boss Name", hp="Total Health Points", image="Boss Image")
     async def boss_setup(self, interaction: discord.Interaction, name: str, hp: float, image: Optional[discord.Attachment] = None):
-        
+        if not interaction.guild_id:
+            await interaction.response.send_message("This command can only be used in a server!", ephemeral=True)
+            return
+
+
         conn = sqlite3.connect(self.db_name)
         c = conn.cursor()
         
         # 1. Check if boss is already alive
-        c.execute("SELECT name, current_hp FROM boss WHERE id=1 AND active=1")
+        c.execute("SELECT name, current_hp FROM boss WHERE guild_id=? AND active=1", (interaction.guild_id,))
         existing_boss = c.fetchone()
         
         if existing_boss and existing_boss[1] > 0:
@@ -50,11 +44,8 @@ class Gym(commands.Cog):
 
         # 2. Create New Boss
         image_url = image.url if image else None
-        c.execute("""
-            UPDATE boss 
-            SET name=?, max_hp=?, current_hp=?, image_url=?, active=1 
-            WHERE id=1
-        """, (name, hp, hp, image_url))
+        c.execute("INSERT INTO boss (guild_id, name, max_hp, current_hp, image_url, active) VALUES (?, ?, ?, ?, ?, 1)",
+                  (interaction.guild_id, name, hp, hp, image_url))
         
         conn.commit()
         conn.close()
@@ -78,7 +69,10 @@ class Gym(commands.Cog):
         app_commands.Choice(name="Calories Burned (kcal)", value="calories"),
     ])
     async def log_workout(self, interaction: discord.Interaction, activity: app_commands.Choice[str], amount: float):
-        
+        if not interaction.guild_id:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+
         # 1. Calculate Damage (XP)
         activity_name = activity.value
         multiplier = self.get_xp_multiplier(activity_name)
@@ -92,15 +86,16 @@ class Gym(commands.Cog):
         c = conn.cursor()
 
         # 2. Update User Stats (Total Damage Dealt)
-        c.execute("INSERT OR IGNORE INTO users (discord_id, username, xp_total) VALUES (?, ?, 0)", 
-                  (interaction.user.id, interaction.user.name))
-        c.execute("UPDATE users SET xp_total = xp_total + ? WHERE discord_id = ?", (damage, interaction.user.id))
+        c.execute("INSERT OR IGNORE INTO users (discord_id, guild_id, username, xp_total) VALUES (?, ?, ?, 0)", 
+                  (interaction.user.id, interaction.guild_id, interaction.user.name))
+        c.execute("UPDATE users SET xp_total = xp_total + ? WHERE discord_id = ? AND guild_id = ?", (damage, interaction.user.id, interaction.guild_id))
 
         # 3. Update Group Streak (Logic: Is today > last_date?)
-        # group_streak table has only one row with id=1
         today = date.today()
         
-        c.execute("SELECT group_streak, last_active_date FROM game_state WHERE id=1")
+        # Ensure guild state exists
+        c.execute("INSERT OR IGNORE INTO game_state (guild_id, group_streak, last_active_date) VALUES (?, 0, NULL)", (interaction.guild_id,))
+        c.execute("SELECT group_streak, last_active_date FROM game_state WHERE guild_id=?", (interaction.guild_id,))
         row = c.fetchone()
         current_streak = row[0]
         last_date = date.fromisoformat(row[1]) if row[1] else None
@@ -114,23 +109,24 @@ class Gym(commands.Cog):
                 new_streak = 1 # Reset or Start new
             
             # Save new date/streak
-            c.execute("UPDATE game_state SET group_streak=?, last_active_date=? WHERE id=1", (new_streak, today))
+            c.execute("UPDATE game_state SET group_streak=?, last_active_date=? WHERE guild_id=?", (new_streak, today, interaction.guild_id))
 
         # 4. DAMAGE THE BOSS
-        # boss table has only one row with id=1
-        c.execute("SELECT name, current_hp, max_hp, image_url, active FROM boss WHERE id=1")
+        # Find the active boss for this guild
+        c.execute("SELECT id, name, current_hp, max_hp, image_url, active FROM boss WHERE guild_id=? AND active=1", (interaction.guild_id,))
         boss_data = c.fetchone()
         
-        boss_name = boss_data[0] if boss_data else "Unknown"
-        boss_hp = boss_data[1] if boss_data else 0
-        boss_max = boss_data[2] if boss_data else 100
-        boss_img = boss_data[3] if boss_data else None
-        is_active = boss_data[4] if boss_data else 0
+        boss_id = boss_data[0] if boss_data else None
+        boss_name = boss_data[1] if boss_data else "Unknown"
+        boss_hp = boss_data[2] if boss_data else 0
+        boss_max = boss_data[3] if boss_data else 100
+        boss_img = boss_data[4] if boss_data else None
+        is_active = boss_data[5] if boss_data else 0
 
         boss_msg = ""
         if is_active and boss_hp > 0:
             new_hp = max(0, boss_hp - damage)
-            c.execute("UPDATE boss SET current_hp = ? WHERE id=1", (new_hp,))
+            c.execute("UPDATE boss SET current_hp = ? WHERE id=?", (new_hp, boss_id))
             
             # Health Bar Visual
             percent = int((new_hp / boss_max) * 10) # 0 to 10
@@ -140,7 +136,7 @@ class Gym(commands.Cog):
             
             if new_hp == 0:
                 boss_msg = f"💀 **VICTORY!** {interaction.user.display_name} landed the killing blow on **{boss_name}**!"
-                c.execute("UPDATE boss SET active=0 WHERE id=1")
+                c.execute("UPDATE boss SET active=0 WHERE id=?", (boss_id,))
         else:
             boss_msg = "💤 No active boss. Use `/boss_setup` to summon one!"
 
@@ -163,9 +159,13 @@ class Gym(commands.Cog):
 
     @app_commands.command(name="leaderboard", description="See who is dealing the most damage")
     async def leaderboard(self, interaction: discord.Interaction):
+        if not interaction.guild_id:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+
         conn = sqlite3.connect(self.db_name)
         c = conn.cursor()
-        c.execute("SELECT discord_id, username, xp_total FROM users ORDER BY xp_total DESC LIMIT 5")
+        c.execute("SELECT discord_id, username, xp_total FROM users WHERE guild_id=? ORDER BY xp_total DESC LIMIT 5", (interaction.guild_id,))
         rows = c.fetchall()
         conn.close()
 
