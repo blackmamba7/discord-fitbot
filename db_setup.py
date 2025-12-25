@@ -6,7 +6,7 @@ def init_db():
 
     # 1. Users Table
     c.execute('''CREATE TABLE IF NOT EXISTS users (
-        discord_id INTEGER PRIMARY KEY,
+        discord_id INTEGER,
         guild_id INTEGER,
         username TEXT,
         xp_total REAL DEFAULT 0,
