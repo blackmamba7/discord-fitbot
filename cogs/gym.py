@@ -266,8 +266,8 @@ class Gym(commands.Cog):
         await interaction.response.send_message(msg)
 
     # --- HISTORY COMMAND ---
-    @app_commands.command(name="history", description="Manage your recent workouts")
-    async def history(self, interaction: discord.Interaction):
+    @app_commands.command(name="log_history", description="Manage your recent workouts")
+    async def log_history(self, interaction: discord.Interaction):
         if not interaction.guild_id:
             await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
             return
