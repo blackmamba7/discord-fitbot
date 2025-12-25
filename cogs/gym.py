@@ -150,6 +150,7 @@ class Gym(commands.Cog):
         # 5. Response Embed
         embed = discord.Embed(title="⚔️ Attack Logged!", color=discord.Color.orange())
         embed.add_field(name="Attacker", value=interaction.user.name, inline=True)
+        embed.add_field(name="Activity", value=f"{amount} {activity.name}", inline=True)
         embed.add_field(name="Damage Dealt", value=f"💥 {int(damage)}", inline=True)
         embed.add_field(name="Group Streak", value=f"🔥 {new_streak} Days", inline=True)
         
