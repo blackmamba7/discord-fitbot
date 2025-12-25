@@ -17,7 +17,7 @@ class HistoryDropdown(discord.ui.Select):
             # Format: "20 Pushups (12-25)"
             date_short = log[4].split(" ")[0] # Get YYYY-MM-DD
             lbl = f"{log[2]} {log[1]} ({int(log[3])} XP)"
-            desc = f"ID: {log[0]} | Date: {date_short}"
+            desc = f"Date: {date_short}"
             
             options.append(discord.SelectOption(
                 label=lbl, 
@@ -63,6 +63,7 @@ class HistoryDropdown(discord.ui.Select):
         # Find the latest boss for this guild (Active or most recently killed)
         c.execute("SELECT id, current_hp, max_hp FROM boss WHERE guild_id=? ORDER BY id DESC LIMIT 1", (guild_id,))
         boss_row = c.fetchone()
+        boss_msg = ""
         if boss_row:
             b_id, current_hp, max_hp = boss_row
             # Heal boss, but don't go over Max HP
@@ -71,6 +72,7 @@ class HistoryDropdown(discord.ui.Select):
             is_active = 1 if new_hp > 0 else 0
             
             c.execute("UPDATE boss SET current_hp = ?, active = ? WHERE id=?", (new_hp, is_active, b_id))
+            boss_msg = f" Removed {int(xp_remove)} damage from the boss."
 
         # 5. Delete the Log
         c.execute("DELETE FROM workout_logs WHERE id = ?", (log_id,))
@@ -79,7 +81,7 @@ class HistoryDropdown(discord.ui.Select):
 
         # 6. User Feedback
         await interaction.response.send_message(
-            f"🗑️ **Deleted:** {amount} {activity}. Removed {int(xp_remove)} damage from the boss.", 
+            f"🗑️ **Deleted:** {amount} {activity}.{boss_msg}", 
             ephemeral=True
         )
         # Disable the selector so they can't click it again
@@ -176,6 +178,10 @@ class Gym(commands.Cog):
         c.execute("INSERT OR IGNORE INTO users (discord_id, guild_id, username, xp_total) VALUES (?, ?, ?, 0)", 
                   (interaction.user.id, interaction.guild_id, interaction.user.name))
         c.execute("UPDATE users SET xp_total = xp_total + ? WHERE discord_id = ? AND guild_id = ?", (damage, interaction.user.id, interaction.guild_id))
+
+        # 2.5 Log the workout
+        c.execute("INSERT INTO workout_logs (user_id, guild_id, activity_name, amount, xp_earned) VALUES (?, ?, ?, ?, ?)",
+                  (interaction.user.id, interaction.guild_id, activity_name, amount, damage))
 
         # 3. Update Group Streak (Logic: Is today > last_date?)
         today = date.today()
@@ -286,7 +292,7 @@ class Gym(commands.Cog):
         conn.close()
 
         if not rows:
-            await interaction.response.send_message("📭 You haven't logged anything yet!", ephemeral=True)
+            await interaction.response.send_message("📭 You don't have any active logs.", ephemeral=True)
             return
 
         embed = discord.Embed(title="📜 Recent History", description="Select a workout below to **permanently delete** it.", color=discord.Color.blue())

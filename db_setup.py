@@ -58,6 +58,9 @@ def init_db():
         FOREIGN KEY(user_id, guild_id) REFERENCES users(discord_id, guild_id)
     )''')
 
+    # 6. Performance Indexes
+    c.execute("CREATE INDEX IF NOT EXISTS idx_workout_logs_user_guild ON workout_logs(user_id, guild_id)")
+
     conn.commit()
     conn.close()
     print("✅ Database initialized successfully!")
