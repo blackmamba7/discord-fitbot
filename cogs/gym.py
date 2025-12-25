@@ -139,7 +139,7 @@ class Gym(commands.Cog):
             boss_msg = f"**{boss_name} HP:** {bar} {int(new_hp)}/{int(boss_max)}"
             
             if new_hp == 0:
-                boss_msg = f"💀 **VICTORY!** {interaction.user.name} landed the killing blow on **{boss_name}**!"
+                boss_msg = f"💀 **VICTORY!** {interaction.user.display_name} landed the killing blow on **{boss_name}**!"
                 c.execute("UPDATE boss SET active=0 WHERE id=1")
         else:
             boss_msg = "💤 No active boss. Use `/boss_setup` to summon one!"
@@ -149,7 +149,7 @@ class Gym(commands.Cog):
 
         # 5. Response Embed
         embed = discord.Embed(title="⚔️ Attack Logged!", color=discord.Color.orange())
-        embed.add_field(name="Attacker", value=interaction.user.name, inline=True)
+        embed.add_field(name="Attacker", value=interaction.user.display_name, inline=True)
         embed.add_field(name="Activity", value=f"{amount} {activity.name}", inline=True)
         embed.add_field(name="Damage Dealt", value=f"💥 {int(damage)}", inline=True)
         embed.add_field(name="Group Streak", value=f"🔥 {new_streak} Days", inline=True)
@@ -165,13 +165,16 @@ class Gym(commands.Cog):
     async def leaderboard(self, interaction: discord.Interaction):
         conn = sqlite3.connect(self.db_name)
         c = conn.cursor()
-        c.execute("SELECT username, xp_total FROM users ORDER BY xp_total DESC LIMIT 5")
+        c.execute("SELECT discord_id, username, xp_total FROM users ORDER BY xp_total DESC LIMIT 5")
         rows = c.fetchall()
         conn.close()
 
         msg = "**🏆 GYM LEADERBOARD 🏆**\n"
         for i, row in enumerate(rows):
-            msg += f"{i+1}. **{row[0]}** - {row[1]} XP\n"
+            user_id, db_name, xp = row
+            member = interaction.guild.get_member(user_id) if interaction.guild else None
+            display_name = member.display_name if member else db_name
+            msg += f"{i+1}. **{display_name}** - {xp} XP\n"
 
         await interaction.response.send_message(msg)
 
