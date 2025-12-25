@@ -5,6 +5,93 @@ import sqlite3
 from typing import Annotated, Optional
 from datetime import date, timedelta
 
+# --- UI CLASSES ---
+class HistoryDropdown(discord.ui.Select):
+    def __init__(self, logs, db_name):
+        self.db_name = db_name
+        
+        # Create an option for each log (Max 25)
+        options = []
+        for log in logs:
+            # log = (id, activity, amount, xp, date)
+            # Format: "20 Pushups (12-25)"
+            date_short = log[4].split(" ")[0] # Get YYYY-MM-DD
+            lbl = f"{log[2]} {log[1]} ({int(log[3])} XP)"
+            desc = f"ID: {log[0]} | Date: {date_short}"
+            
+            options.append(discord.SelectOption(
+                label=lbl, 
+                description=desc, 
+                value=str(log[0]), 
+                emoji="🗑️"
+            ))
+
+        super().__init__(
+            placeholder="Select a workout to DELETE it...", 
+            min_values=1, 
+            max_values=1, 
+            options=options
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        # 1. Identify the log
+        log_id = int(self.values[0])
+        conn = sqlite3.connect(self.db_name)
+        c = conn.cursor()
+        
+        # 2. Get details before deleting (to calculate refund)
+        c.execute("SELECT user_id, guild_id, xp_earned, amount, activity_name FROM workout_logs WHERE id=?", (log_id,))
+        row = c.fetchone()
+        
+        if not row:
+            await interaction.response.send_message("❌ Log already deleted or not found.", ephemeral=True)
+            conn.close()
+            return
+            
+        user_id, guild_id, xp_remove, amount, activity = row
+        
+        # Security: Double check ownership
+        if user_id != interaction.user.id:
+            await interaction.response.send_message("⛔ You can only delete your own logs.", ephemeral=True)
+            conn.close()
+            return
+
+        # 3. Revert User XP
+        c.execute("UPDATE users SET xp_total = xp_total - ? WHERE discord_id = ? AND guild_id = ?", (xp_remove, user_id, guild_id))
+        
+        # 4. Revert Boss HP (Heal him back)
+        # Find the latest boss for this guild (Active or most recently killed)
+        c.execute("SELECT id, current_hp, max_hp FROM boss WHERE guild_id=? ORDER BY id DESC LIMIT 1", (guild_id,))
+        boss_row = c.fetchone()
+        if boss_row:
+            b_id, current_hp, max_hp = boss_row
+            # Heal boss, but don't go over Max HP
+            new_hp = min(max_hp, current_hp + xp_remove)
+            # If boss was dead (0 HP), revive him if he gets HP back
+            is_active = 1 if new_hp > 0 else 0
+            
+            c.execute("UPDATE boss SET current_hp = ?, active = ? WHERE id=?", (new_hp, is_active, b_id))
+
+        # 5. Delete the Log
+        c.execute("DELETE FROM workout_logs WHERE id = ?", (log_id,))
+        conn.commit()
+        conn.close()
+
+        # 6. User Feedback
+        await interaction.response.send_message(
+            f"🗑️ **Deleted:** {amount} {activity}. Removed {int(xp_remove)} damage from the boss.", 
+            ephemeral=True
+        )
+        # Disable the selector so they can't click it again
+        self.disabled = True
+        await interaction.message.edit(view=self.view)
+
+class HistoryView(discord.ui.View):
+    def __init__(self, logs, db_name):
+        super().__init__()
+        self.add_item(HistoryDropdown(logs, db_name))
+
+
 class Gym(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -177,6 +264,36 @@ class Gym(commands.Cog):
             msg += f"{i+1}. **{display_name}** - {xp} XP\n"
 
         await interaction.response.send_message(msg)
+
+    # --- HISTORY COMMAND ---
+    @app_commands.command(name="history", description="Manage your recent workouts")
+    async def history(self, interaction: discord.Interaction):
+        if not interaction.guild_id:
+            await interaction.response.send_message("This command can only be used in a server.", ephemeral=True)
+            return
+
+        conn = sqlite3.connect(self.db_name)
+        c = conn.cursor()
+        
+        # Fetch last 25 logs for user in this guild
+        c.execute("""
+            SELECT id, activity_name, amount, xp_earned, timestamp 
+            FROM workout_logs 
+            WHERE user_id = ? AND guild_id = ?
+            ORDER BY id DESC LIMIT 25
+        """, (interaction.user.id, interaction.guild_id))
+        rows = c.fetchall()
+        conn.close()
+
+        if not rows:
+            await interaction.response.send_message("📭 You haven't logged anything yet!", ephemeral=True)
+            return
+
+        embed = discord.Embed(title="📜 Recent History", description="Select a workout below to **permanently delete** it.", color=discord.Color.blue())
+        
+        view = HistoryView(rows, self.db_name)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+
 
 async def setup(bot):
     await bot.add_cog(Gym(bot))
